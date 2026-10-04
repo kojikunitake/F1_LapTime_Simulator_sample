@@ -10,7 +10,7 @@ The engine simulates Formula 1 vehicle dynamics by coupling multi-sector longitu
 
 - **High-Performance C++17 Core Engine:** Implements a decoupled structure (Headers/Sources) ensuring fast build cycles, explicit memory safety, and robust file I/O operations using `<filesystem>`.
 - **Decoupled Vehicle Dynamics Model:**
-  - *Longitudinal Model:* Integrates dynamic propulsion forces scaled by throttle inputs balanced against speed-dependent aerodynamic drag (\(F_{drag} = \frac{1}{2} \rho A C_d v^2\)) and heavy braking deceleration vectors.
+  - *Longitudinal Model:* Integrates dynamic propulsion forces scaled by throttle inputs balanced against speed-dependent aerodynamic drag $F_{drag} = \frac{1}{2} \rho A C_d v^2$ and heavy braking deceleration vectors.
   - *Lateral Grip Constraint Solver:* Models tire adhesion limits (up to 5G lateral acceleration) by calculating local curve radius and track curvature (κ) from dynamic 3-point telemetry vectors.
 - **Racing Line Optimization:** Utilizes an iterative **Numerical Gradient Descent (Gradient Mutation)** algorithm to transition trajectories from the basic track centerline to the idealized, time-optimal racing profile while respecting physical track-width boundaries.
 - **Conditioned Telemetry Streaming:** Features an analytical disk-I/O optimization toggle (`debug_mode`) to record dense telemetry logs (`vmax_log.csv`) on demand without sacrificing core computational throughput during multi-epoch optimization cycles.
@@ -99,7 +99,7 @@ When `debug_mode` is enabled, the calculation engine streams dense runtime data 
 |---|---|---|
 | `idx` | Discrete spatial coordinate track point index | Integer |
 | `s` | Absolute cumulative distance traveled along track centerline (meters) | Double |
-| `kappa` | Local track curvature (\(\kappa = \frac{4 \cdot \text{Area}}{a \cdot b \cdot c}\)) | Double |
+| `kappa` | Local track curvature $\kappa = \frac{4 \cdot \text{Area}}{a \cdot b \cdot c}$ | Double |
 | `vmax` | Aero-G grip bounded absolute maximum safe velocity (m/s) | Double |
 | `v` | Instantaneous physical vehicle velocity profile output (m/s) | Double |
 
