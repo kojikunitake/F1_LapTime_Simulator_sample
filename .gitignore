@@ -1,0 +1,152 @@
+# ==============================================================================
+# General .gitignore template (Web development & major languages)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Operating System (OS) specific files
+# ------------------------------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+*.sys
+*.tmp
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.trash/
+.nfs*
+
+# ------------------------------------------------------------------------------
+# 2. Main code editor / IDE (Integrated Development Environment)
+# ------------------------------------------------------------------------------
+# VS Code (keep configuration for team sharing, exclude personal local settings and cache)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/code-workspace
+.history/
+*.code-search
+
+# JetBrains (IntelliJ, WebStorm, PyCharm, PhpStorm, Rider, CLion, etc)
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+
+# Other editors
+.project
+.classpath
+.settings/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*~
+.jenv/
+
+# ------------------------------------------------------------------------------
+# 3. Environment variable files and secret information (Security measures)
+# ------------------------------------------------------------------------------
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+*.env.*
+!.env.example # Team sharing sample file is not excluded
+
+# Authentication keys and certificates
+*.pem
+*.key
+*.pub
+*.crt
+*.pfx
+*.p12
+
+# ------------------------------------------------------------------------------
+# 4. Main package managers / dependency directories
+# ------------------------------------------------------------------------------
+# Node.js
+node_modules/
+jspm_packages/
+.pnpm-store/
+.yarn/cache/
+.yarn/unplugged/
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+.poetry/
+
+# ------------------------------------------------------------------------------
+# 5. Build artifacts, temporary files, and cache
+# ------------------------------------------------------------------------------
+# Generic build and generated files
+dist/
+build/
+out/
+target/
+bin/
+obj/
+*.ilk
+*.obj
+*.pdb
+*.exe
+
+# Log files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test coverage reports
+coverage/
+.nyc_output/
+htmlcov/
+.tox/
+
+# Local cache for major Web frameworks (Next.js, Nuxt, Gatsby, etc.)
+.next/
+.nuxt/
+.gatsby/
+.docusaurus/
+.turbo/
+.cache/
+
+# ==============================================================================
+# Add project-specific custom settings below
+# ==============================================================================
