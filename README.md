@@ -137,6 +137,10 @@ When `debug_mode` is enabled, the calculation engine streams dense runtime data 
 | `x` | Baseline centerline X coordinate (meters) | Double |
 | `y` | Baseline centerline Y coordinate (meters) | Double |
 | `lateral` | Optimized optimal lateral displacement offset from center (meters) | Double |
+| `vmax` | Geometry friction and lateral G-grip bounded maximum safe velocity (m/s) | Double |
+| `vfwd` | Forward acceleration-limited powertrain capability envelope (m/s) | Double |
+| `vbwd` | Backward deceleration-limited theoretical braking capability profile (m/s) | Double |
+| `v` | Synthesized final physical vehicle velocity profile output (m/s) | Double |
 
 ---
 

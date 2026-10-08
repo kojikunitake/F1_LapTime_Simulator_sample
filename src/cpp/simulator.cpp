@@ -286,25 +286,38 @@ void LaptimeSimulator::runSimulation(bool enable_telemetry) {
 
 // Saves the optimised racing line into a CSV file for external analysis and visualization
 bool LaptimeSimulator::saveResult(const std::string& circuit_name) {
-    if (!fs::exists(output_dir)) {
-        fs::create_directories(output_dir);
-    }
+    std::filesystem::create_directories(output_dir);
+    std::filesystem::path file_path = output_dir / (circuit_name + "_optimised_line.csv");
 
-    fs::path file_path = output_dir / (circuit_name + "_optimised_line.csv");
     std::ofstream file(file_path);
-
     if (!file.is_open()) {
-        std::cerr << "[Error] Output filesystem lock failed: " << file_path << std::endl;
+        std::cerr << "[Error] Failed to open file for exporting coordinates: " << file_path << std::endl;
         return false;
     }
 
-    file << "idx,x,y,lateral\n";
+    // UPGRADED HEADER: Add all two-pass physics profile columns for professional telemetry
+    file << "idx,x,y,lateral,vmax,vfwd,vbwd,v\n";
 
-    for (size_t idx = 0; idx < track_data.size(); ++idx) {
-        Vec2 pos = computeLinePos(idx, lateral_offsets[idx]);
-        file << idx << "," << pos.x << "," << pos.y << "," << lateral_offsets[idx] << "\n";
+    size_t N = track_data.size();
+    
+    // Ensure all internal profile vectors are structural with track data length
+    if (v_max_profile.size() < N) v_max_profile.resize(N, 80.0);
+    if (v_fwd_profile.size() < N) v_fwd_profile.resize(N, 80.0);
+    if (v_bwd_profile.size() < N) v_bwd_profile.resize(N, 80.0);
+    if (v_final_profile.size() < N) v_final_profile.resize(N, 80.0);
+
+    for (size_t i = 0; i < N; ++i) {
+        file << i << ","
+             << track_data[i].x << ","
+             << track_data[i].y << ","
+             << lateral_offsets[i] << ","
+             << v_max_profile[i] << ","   // Geometry friction limit
+             << v_fwd_profile[i] << ","   // Forward acceleration pass
+             << v_bwd_profile[i] << ","   // Backward braking pass
+             << v_final_profile[i] << "\n"; // Synthesized absolute envelope
     }
 
+    file.close();
     std::cout << "[Simulator] Spatial racing profile logged at: " << file_path << std::endl;
     return true;
 }
