@@ -47,6 +47,12 @@ private:
     VehicleParams vehicle_params;
     double dt; // Simulation time step
 
+    // 2-Pass Solver Profile Buffers
+    std::vector<double> v_max_profile;   // Geometry/G-grip limits
+    std::vector<double> v_fwd_profile;   // Forward acceleration profile
+    std::vector<double> v_bwd_profile;   // Backward deceleration profile
+    std::vector<double> v_final_profile; // Synthesized target velocity profile
+
     // Internal helper methods for track math and coordinate transforms
     std::vector<double> buildDistanceTable(const std::vector<TrackPoint>& track);
     size_t findTrackIndex(double s);
@@ -54,7 +60,7 @@ private:
     double curvatureFromLine(const Vec2& A, const Vec2& B, const Vec2& C);
     double computeVmaxFromLine(size_t idx, const std::vector<double>& current_lateral);
     
-    // Core physics updater
+    // Core physics updater (Legacy loop compatibility)
     void updateVehicle(VehicleState& state, double throttle, double brake);
     
     // Constraints logic
@@ -62,23 +68,33 @@ private:
     double clampLateral(double lateral, double max_left, double max_right);
     Vec2 computeLinePos(size_t idx, double lateral);
 
+    // Internal calculation engine for the Two-Pass Solver
+    void computeCornerLimits();
+    void computeForwardPass();
+    void computeBackwardPass();
+    void synthesizeVelocityProfile();
+    double runSimulationPass(const std::vector<double>& test_lateral);
+
 public:
     LaptimeSimulator(const std::string& input_path, const std::string& output_path);
 
     // Entry point to load the telemetry database from JSON
     bool loadCircuit(const std::string& circuit_name);
 
-    // Added a flag to control telemetry output via argument
+    // Solves for base and optimised lap profile
     void runSimulation(bool enable_telemetry = false);
 
-    // Runs Gradient Descent Optimization to solve the racing line
-    void optimizeLineGradient();
+    // Runs Gradient Descent Optimisation to solve the racing line
+    void optimiseLineGradient();
 
     // Saves the calculated optimal trajectory into a CSV
     bool saveResult(const std::string& circuit_name);
 
-    // Extended computeLapTime to accept a telemetry output flag for conditional logging
+    // Overloaded function to compute lap time (Legacy loop compatibility)
     double computeLapTime(const std::vector<double>& current_lateral, bool enable_telemetry = false);
+    
+    // Integrates and extracts total lap time from the final profile
+    double calculateLapTimeFromProfile();
 };
 
 #endif // SIMULATOR_HPP

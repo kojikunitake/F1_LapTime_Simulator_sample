@@ -7,7 +7,7 @@ int main() {
     std::string output_path = "../../output_data";
 
     std::cout << "=====================================================" << std::endl;
-    std::cout << "       F1 Optimal Trajectory Simulator Engine        " << std::endl;
+    std::cout << "       F1 2-Pass Optimal Trajectory Simulator        " << std::endl;
     std::cout << "=====================================================" << std::endl;
 
     // Instance simulation context
@@ -18,9 +18,22 @@ int main() {
 
     // Multi-staged data processing routine
     if (simulator.loadCircuit(target_circuit)) {
-        bool debug_mode = false; // Set to true to enable telemetry logging
-        
-        simulator.runSimulation(debug_mode);
+        std::cout << "\n[Step 1] Running Baseline Simulation (Centerline)..." << std::endl;
+        // If you want to log the initial baseline lap time (centerline trajectory) into telemetry (vmax_log.csv), set this flag to true.
+        bool enable_initial_log = false; 
+        simulator.runSimulation(enable_initial_log);
+
+        std::cout << "\n[Step 2] Executing Trajectory Optimisation Loop..." << std::endl;
+        // Execute the gradient descent optimisation routine to refine the racing line
+        simulator.optimiseLineGradient();
+
+        std::cout << "\n[Step 3] Running Final Simulation (Optimised Racing Line)..." << std::endl;
+        // If you want to log the final optimised lap time into telemetry (vmax_log.csv), set this flag to true.
+        bool enable_final_log = true;
+        simulator.runSimulation(enable_final_log);
+
+        std::cout << "\n[Step 4] Exporting Spatial Trajectory Coordinates..." << std::endl;
+        // 導き出された理想の2Dレーシングラインの座標データをCSV（suzuka_optimised_line.csv）へ保存
         simulator.saveResult(target_circuit);
     }
 
