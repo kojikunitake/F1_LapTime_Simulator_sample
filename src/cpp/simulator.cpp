@@ -597,5 +597,5 @@ void LaptimeSimulator::optimiseLineGradient() {
         }
     }
 
-    std::cout << "[Optimiser] Trajectory processing finalized. Optimal line frozen." << std::endl;
+    std::cout << "[Optimiser] Trajectory processing finalised. Optimal line frozen." << std::endl;
 }
