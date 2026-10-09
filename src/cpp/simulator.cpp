@@ -443,9 +443,10 @@ void LaptimeSimulator::optimiseLineGradient() {
     std::cout << "[Optimizer] Initiating 2-Pass coupled trajectory optimization..." << std::endl;
 
     const int max_epochs = 20;        
-    const double learning_rate = 0.2; // Increased to accelerate the racing line convergence
-    const double h = 1.0;             // 1.0m perturbation to overcome the coarse 33m node grid resolution
+    const double learning_rate = 0.15; // Balanced learning rate for robust central convergence
+    const double h = 1.0;              // 1.0m perturbation to overcome coarse grid grid resolution
 
+    // 1. Establish the authentic global baseline performance
     computeCornerLimits();
     computeForwardPass();
     computeBackwardPass();
@@ -457,30 +458,48 @@ void LaptimeSimulator::optimiseLineGradient() {
     for (int epoch = 1; epoch <= max_epochs; ++epoch) {
         std::vector<double> gradients(N, 0.0);
 
-        for (size_t i = 1; i < N - 1; ++i) {
+        // STEP 1: Compute High-Fidelity Central Differences Across ALL Nodes (Cyclic Loop)
+        for (size_t i = 0; i < N; ++i) {
             double original_lateral = lateral_offsets[i];
             auto [max_left, max_right] = computeLateralLimit(track_data[i]);
+            double actual_right_bound = (max_right > 0) ? -max_right : max_right;
+            double actual_left_bound = max_left;
 
-            double actual_right_bound = (max_right > 0) ? -max_right : max_right; // min (e.g. -5.0)
-            double actual_left_bound = max_left;                                 // max (e.g. +5.0)
+            double t_plus = current_best_laptime;
+            double t_minus = current_best_laptime;
 
-            // Test shift towards left (+h)
+            // Test Upper Bound Shift (Left: +h)
             double lat_plus = original_lateral + h;
             if (lat_plus <= actual_left_bound) {
                 lateral_offsets[i] = lat_plus;
+                // Run localized 2-pass update (In a full scalable architecture, compute local window. 
+                // For N=172, central evaluation secures perfect physical interaction across long straights)
                 computeCornerLimits();
                 computeForwardPass();
                 computeBackwardPass();
                 synthesizeVelocityProfile();
-                double t_plus = calculateLapTimeFromProfile();
-                
-                gradients[i] = (t_plus - current_best_laptime) / h;
+                t_plus = calculateLapTimeFromProfile();
             }
-            lateral_offsets[i] = original_lateral; // Reset
+            
+            // Test Lower Bound Shift (Right: -h)
+            double lat_minus = original_lateral - h;
+            if (lat_minus >= actual_right_bound) {
+                lateral_offsets[i] = lat_minus;
+                computeCornerLimits();
+                computeForwardPass();
+                computeBackwardPass();
+                synthesizeVelocityProfile();
+                t_minus = calculateLapTimeFromProfile();
+            }
+
+            lateral_offsets[i] = original_lateral; // Strict restoration of spatial state
+
+            // CENTRAL DIFFERENCE EQUATION: Secures smooth dual-sided physical gradients
+            gradients[i] = (t_plus - t_minus) / (2.0 * h);
         }
 
-        // Apply gradients cleanly using the newly secured clamp behavior
-        for (size_t i = 1; i < N - 1; ++i) {
+        // STEP 2: Simultaneous Gradient Descent Update with Clamp Enforcement
+        for (size_t i = 0; i < N; ++i) {
             auto [max_left, max_right] = computeLateralLimit(track_data[i]);
             double actual_right_bound = (max_right > 0) ? -max_right : max_right;
             double actual_left_bound = max_left;
@@ -489,19 +508,23 @@ void LaptimeSimulator::optimiseLineGradient() {
             lateral_offsets[i] = clampLateral(updated_lateral, actual_right_bound, actual_left_bound);
         }
 
-        // Apply smooth 3-point moving average to filter jagged transitions
+        // STEP 3: Continuous Cyclical 3-Point Moving Average (Eradicates Boundary Discontinuity)
         std::vector<double> smoothed_offsets = lateral_offsets;
-        for (size_t i = 1; i < N - 1; ++i) {
+        for (size_t i = 0; i < N; ++i) {
+            size_t prev_idx = (i - 1 + N) % N; // Cyclical wrap-around for node 0
+            size_t next_idx = (i + 1) % N;     // Cyclical wrap-around for node N-1
+
             auto [max_left, max_right] = computeLateralLimit(track_data[i]);
             double actual_right_bound = (max_right > 0) ? -max_right : max_right;
             double actual_left_bound = max_left;
 
-            double smooth_val = 0.25 * lateral_offsets[i - 1] + 0.5 * lateral_offsets[i] + 0.25 * lateral_offsets[i + 1];
+            // Laplacian kernel [0.25, 0.50, 0.25]
+            double smooth_val = 0.25 * lateral_offsets[prev_idx] + 0.5 * lateral_offsets[i] + 0.25 * lateral_offsets[next_idx];
             smoothed_offsets[i] = clampLateral(smooth_val, actual_right_bound, actual_left_bound);
         }
         lateral_offsets = smoothed_offsets;
 
-        // Re-evaluate laptime performance
+        // STEP 4: Synchronize Absolute Core Physics Profiles and Update Master Lap Time
         computeCornerLimits();
         computeForwardPass();
         computeBackwardPass();
