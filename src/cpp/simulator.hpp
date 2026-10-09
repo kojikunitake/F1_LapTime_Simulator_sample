@@ -51,7 +51,11 @@ private:
     std::vector<double> v_max_profile;   // Geometry/G-grip limits
     std::vector<double> v_fwd_profile;   // Forward acceleration profile
     std::vector<double> v_bwd_profile;   // Backward deceleration profile
-    std::vector<double> v_final_profile; // Synthesized target velocity profile
+    std::vector<double> v_final_profile; // Synthesised target velocity profile
+
+    // ADDED FOR G-G TELEMETRY EXTENSION
+    std::vector<double> g_long_profile; // Longitudinal G profile
+    std::vector<double> g_lat_profile;  // Lateral G profile
 
     // Internal helper methods for track math and coordinate transforms
     std::vector<double> buildDistanceTable(const std::vector<TrackPoint>& track);
@@ -72,7 +76,7 @@ private:
     void computeCornerLimits();
     void computeForwardPass();
     void computeBackwardPass();
-    void synthesizeVelocityProfile();
+    void synthesiseVelocityProfile();
     double runSimulationPass(const std::vector<double>& test_lateral);
 
 public:

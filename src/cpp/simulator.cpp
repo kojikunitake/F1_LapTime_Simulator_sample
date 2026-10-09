@@ -24,7 +24,7 @@
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 
-// Constructor initializes the simulator with input/output directories and default vehicle parameters
+// Constructor initialises the simulator with input/output directories and default vehicle parameters
 LaptimeSimulator::LaptimeSimulator(const std::string& input_path, const std::string& output_path)
     : input_dir(input_path), output_dir(output_path), dt(0.01) {
     vehicle_params = {798.0, 8000.0, 100000.0, 1.1, 1.6, 1.225};
@@ -273,7 +273,7 @@ void LaptimeSimulator::runSimulation(bool enable_telemetry) {
     computeCornerLimits();
     computeForwardPass();
     computeBackwardPass();
-    synthesizeVelocityProfile();
+    synthesiseVelocityProfile();
 
     double lap_time = calculateLapTimeFromProfile();
     std::cout << "[Result] Lap time for current trajectory = " << lap_time << " s" << std::endl;
@@ -284,7 +284,7 @@ void LaptimeSimulator::runSimulation(bool enable_telemetry) {
     }
 }
 
-// Saves the optimised racing line into a CSV file for external analysis and visualization
+// Saves the optimised racing line into a CSV file for external analysis and visualisation
 bool LaptimeSimulator::saveResult(const std::string& circuit_name) {
     std::filesystem::create_directories(output_dir);
     std::filesystem::path file_path = output_dir / (circuit_name + "_optimised_line.csv");
@@ -295,30 +295,90 @@ bool LaptimeSimulator::saveResult(const std::string& circuit_name) {
         return false;
     }
 
-    // UPGRADED HEADER: Add all two-pass physics profile columns for professional telemetry
-    file << "idx,x,y,lateral,vmax,vfwd,vbwd,v\n";
-
     size_t N = track_data.size();
-    
-    // Ensure all internal profile vectors are structural with track data length
-    if (v_max_profile.size() < N) v_max_profile.resize(N, 80.0);
-    if (v_fwd_profile.size() < N) v_fwd_profile.resize(N, 80.0);
-    if (v_bwd_profile.size() < N) v_bwd_profile.resize(N, 80.0);
-    if (v_final_profile.size() < N) v_final_profile.resize(N, 80.0);
+    g_long_profile.resize(N, 0.0);
+    g_lat_profile.resize(N, 0.0);
 
+    const double g_accel = 9.81; // Gravity constant
+    const double max_friction_g = 5.0; // Explicit F1 Tire Grip Limit (5.0G)
+
+    // STEP 1: Reconstruct the ACTUAL Optimised Racing Line Coordinates
+    std::vector<double> opt_x(N, 0.0);
+    std::vector<double> opt_y(N, 0.0);
+
+    for (size_t i = 0; i < N; ++i) {
+        size_t prev_idx = (i - 1 + N) % N;
+        size_t next_idx = (i + 1) % N;
+        
+        double dx = track_data[next_idx].x - track_data[prev_idx].x;
+        double dy = track_data[next_idx].y - track_data[prev_idx].y;
+        double mag = std::sqrt(dx*dx + dy*dy);
+        if (mag < 1e-5) mag = 1.0;
+        
+        double nx = -dy / mag;
+        double ny = dx / mag;
+
+        opt_x[i] = track_data[i].x + nx * lateral_offsets[i];
+        opt_y[i] = track_data[i].y + ny * lateral_offsets[i];
+    }
+
+    // STEP 2: Compute Pure Vehicle Dynamics G-Forces with Ellipse Guard
+    for (size_t i = 0; i < N; ++i) {
+        size_t prev_idx = (i - 1 + N) % N;
+        size_t next_idx = (i + 1) % N;
+        
+        double dx_seg = opt_x[next_idx] - opt_x[i];
+        double dy_seg = opt_y[next_idx] - opt_y[i];
+        double ds = std::sqrt(dx_seg*dx_seg + dy_seg*dy_seg);
+        if (ds < 1e-3) ds = 1.0;
+
+        double v_curr = v_final_profile[i];
+        double v_next = v_final_profile[next_idx];
+
+        // Energy-based longitudinal acceleration
+        double accel_long = (v_next * v_next - v_curr * v_curr) / (2.0 * ds);
+        double raw_long_g = accel_long / g_accel;
+
+        // Trajectory curvature-based lateral acceleration
+        Vec2 p_prev = { opt_x[prev_idx], opt_y[prev_idx] };
+        Vec2 p_curr = { opt_x[i],        opt_y[i] };
+        Vec2 p_next = { opt_x[next_idx], opt_y[next_idx] };
+
+        double actual_curvature = curvatureFromLine(p_prev, p_curr, p_next);
+        double raw_lat_g = (v_curr * v_curr * actual_curvature) / g_accel;
+
+        double cross_product = (p_curr.x - p_prev.x) * (p_next.y - p_curr.y) - (p_curr.y - p_prev.y) * (p_next.x - p_curr.x);
+        double turn_sign = (cross_product >= 0.0) ? 1.0 : -1.0;
+        double signed_lat_g = raw_lat_g * turn_sign;
+
+        // FRICTION ELLIPSE GUARD: Dynamically scale back numerical discretisation spikes
+        double combined_g = std::sqrt(raw_long_g * raw_long_g + signed_lat_g * signed_lat_g);
+        if (combined_g > max_friction_g && combined_g > 1e-4) {
+            double scale = max_friction_g / combined_g;
+            raw_long_g *= scale;
+            signed_lat_g *= scale;
+        }
+
+        g_long_profile[i] = raw_long_g;
+        g_lat_profile[i] = signed_lat_g;
+    }
+
+    // Write to CSV
+    file << "idx,x,y,lateral,vmax,vfwd,vbwd,v,long_g,lat_g\n";
     for (size_t i = 0; i < N; ++i) {
         file << i << ","
              << track_data[i].x << ","
              << track_data[i].y << ","
              << lateral_offsets[i] << ","
-             << v_max_profile[i] << ","   // Geometry friction limit
-             << v_fwd_profile[i] << ","   // Forward acceleration pass
-             << v_bwd_profile[i] << ","   // Backward braking pass
-             << v_final_profile[i] << "\n"; // Synthesized absolute envelope
+             << v_max_profile[i] << ","
+             << v_fwd_profile[i] << ","
+             << v_bwd_profile[i] << ","
+             << v_final_profile[i] << ","
+             << g_long_profile[i] << ","  
+             << g_lat_profile[i] << "\n"; 
     }
-
     file.close();
-    std::cout << "[Simulator] Spatial racing profile logged at: " << file_path << std::endl;
+    std::cout << "[Simulator] Spatial racing profile with Aligned & Guarded G-Forces logged successfully." << std::endl;
     return true;
 }
 
@@ -404,8 +464,8 @@ void LaptimeSimulator::computeBackwardPass() {
     }
 }
 
-// 4. Synthesize profiles to extract the optimal performance boundary
-void LaptimeSimulator::synthesizeVelocityProfile() {
+// 4. Synthesise profiles to extract the optimal performance boundary
+void LaptimeSimulator::synthesiseVelocityProfile() {
     size_t N = track_data.size();
     v_final_profile.resize(N);
 
@@ -440,7 +500,7 @@ void LaptimeSimulator::optimiseLineGradient() {
     size_t N = track_data.size();
     if (N < 3) return;
 
-    std::cout << "[Optimizer] Initiating 2-Pass coupled trajectory optimization..." << std::endl;
+    std::cout << "[Optimiser] Initiating 2-Pass coupled trajectory optimization..." << std::endl;
 
     const int max_epochs = 20;        
     const double learning_rate = 0.15; // Balanced learning rate for robust central convergence
@@ -450,7 +510,7 @@ void LaptimeSimulator::optimiseLineGradient() {
     computeCornerLimits();
     computeForwardPass();
     computeBackwardPass();
-    synthesizeVelocityProfile();
+    synthesiseVelocityProfile();
     double current_best_laptime = calculateLapTimeFromProfile();
     
     std::cout << "  > Initial Base Lap Time: " << current_best_laptime << " s" << std::endl;
@@ -472,12 +532,12 @@ void LaptimeSimulator::optimiseLineGradient() {
             double lat_plus = original_lateral + h;
             if (lat_plus <= actual_left_bound) {
                 lateral_offsets[i] = lat_plus;
-                // Run localized 2-pass update (In a full scalable architecture, compute local window. 
+                // Run localised 2-pass update (In a full scalable architecture, compute local window. 
                 // For N=172, central evaluation secures perfect physical interaction across long straights)
                 computeCornerLimits();
                 computeForwardPass();
                 computeBackwardPass();
-                synthesizeVelocityProfile();
+                synthesiseVelocityProfile();
                 t_plus = calculateLapTimeFromProfile();
             }
             
@@ -488,7 +548,7 @@ void LaptimeSimulator::optimiseLineGradient() {
                 computeCornerLimits();
                 computeForwardPass();
                 computeBackwardPass();
-                synthesizeVelocityProfile();
+                synthesiseVelocityProfile();
                 t_minus = calculateLapTimeFromProfile();
             }
 
@@ -524,11 +584,11 @@ void LaptimeSimulator::optimiseLineGradient() {
         }
         lateral_offsets = smoothed_offsets;
 
-        // STEP 4: Synchronize Absolute Core Physics Profiles and Update Master Lap Time
+        // STEP 4: Synchronise Absolute Core Physics Profiles and Update Master Lap Time
         computeCornerLimits();
         computeForwardPass();
         computeBackwardPass();
-        synthesizeVelocityProfile();
+        synthesiseVelocityProfile();
         current_best_laptime = calculateLapTimeFromProfile();
 
         if (epoch == 1 || epoch % 5 == 0 || epoch == max_epochs) {
@@ -537,5 +597,5 @@ void LaptimeSimulator::optimiseLineGradient() {
         }
     }
 
-    std::cout << "[Optimizer] Trajectory processing finalized. Optimal line frozen." << std::endl;
+    std::cout << "[Optimiser] Trajectory processing finalized. Optimal line frozen." << std::endl;
 }
