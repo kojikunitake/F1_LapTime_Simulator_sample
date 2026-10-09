@@ -11,15 +11,20 @@ The engine simulates Formula 1 vehicle dynamics by coupling multi-sector longitu
 ## 🚀 Key Technical Features
 
 - **High-Performance C++17 Core Engine:** Implements a decoupled structure (Headers/Sources) ensuring fast build cycles, explicit memory safety, and robust file I/O operations using `<filesystem>`.
-- **Coupled Two-Pass Velocity Solver Architecture:** Features a robust forward-backward velocity pass that reconciles powertrain capabilities, mechanical traction circles, and speed-dependent aerodynamic drag (\(F_{drag} = \frac{1}{2} \rho A C_d v^2\)) to extract the absolute physics-limited performance envelope.
+- **Coupled Two-Pass Velocity Solver Architecture:** Features a robust forward-backward velocity pass that reconciles powertrain capabilities, mechanical traction circles, and speed-dependent aerodynamic drag to extract the absolute physics-limited performance envelope.
   - *Forward Pass:* Computes acceleration capabilities bounded by engine power and exit traction limits.
   - *Backward Pass:* Integrates deceleration vectors in reverse from the apex to accurately determine the exact theoretical **Braking Points**, eliminating legacy velocity spikes.
-- **2nd-Order Central Difference Gradient Descent:** Shakes off centerline rigidity by computing highly accurate dual-sided numerical derivatives via a **2nd-order Central Difference Method**:
-  \[G_i = \frac{T_{plus}(s_i + h) - T_{minus}(s_i - h)}{2h}\]
-  This guarantees balanced spatial gradient alignment across both left and right directional changes.
-- **Continuous Cyclical Laplacian Filtering:** Integrates a cyclical 3-point moving average filter utilising **Cyclic Wrap-Around Indexing** (\(\text{idx}_{\text{prev}} = (i - 1 + N) \pmod N\)). This actively suppresses numerical noise and guarantees complete \(C^2\) geometric continuity across the start/finish straight.
+- **2nd-Order Central Difference Gradient Descent:** Shakes off centerline rigidity by computing highly accurate dual-sided numerical derivatives via a 2nd-order Central Difference Method. This guarantees balanced spatial gradient alignment across both left and right directional changes.
+
+$$G_i = \frac{T_{\text{plus}}(s_i + h) - T_{\text{minus}}(s_i - h)}{2h}$$
+
+- **Continuous Cyclical Laplacian Filtering:** Integrates a cyclical 3-point moving average filter utilizing Cyclic Wrap-Around Indexing. This actively suppresses numerical noise and guarantees complete C² geometric continuity across the start/finish straight.
+
+$$\text{idx}_{\text{prev}} = (i - 1 + N) \pmod N$$
+
 - **Energy-Based G-Force Modeling & Friction Ellipse Guard:** Re-engineered spatial acceleration based on energy-conservation principles aligned with an explicit physical boundary guard. If discrete coordinate resolution limits introduce numerical spikes exceeding tire limits, the system dynamically clamps arrays directly onto the **5.0G Traction Limit**:
-  \[\text{if } \Vert{}G_{total}\Vert{} > 5.0\text{G}, \quad \vec{G}_{\text{guarded}} = \vec{G} \cdot \left(\frac{5.0}{\Vert{}G_{total}\Vert{}}\right)\]
+
+$$\text{if } |G_{\text{total}}| > 5.0, \quad \vec{G}_{\text{guarded}} = \vec{G} \cdot \left(\frac{5.0}{|G_{\text{total}}|}\right)$$
 
 ---
 
