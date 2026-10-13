@@ -33,7 +33,7 @@ int main() {
         simulator.runSimulation(enable_final_log);
 
         std::cout << "\n[Step 4] Exporting Spatial Trajectory Coordinates..." << std::endl;
-        // 導き出された理想の2Dレーシングラインの座標データをCSV（suzuka_optimised_line.csv）へ保存
+        // Save the optimised racing line coordinates into a CSV file for external analysis and visualisation
         simulator.saveResult(target_circuit);
     }
 
