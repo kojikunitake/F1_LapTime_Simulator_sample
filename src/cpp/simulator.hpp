@@ -70,7 +70,6 @@ private:
     // Constraints logic
     std::pair<double, double> computeLateralLimit(const TrackPoint& p);
     double clampLateral(double lateral, double max_left, double max_right);
-    Vec2 computeLinePos(size_t idx, double lateral);
 
     // Internal calculation engine for the Two-Pass Solver
     void computeCornerLimits();

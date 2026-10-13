@@ -90,13 +90,22 @@ size_t LaptimeSimulator::findTrackIndex(double s) {
 
 // Computes the position offset from the centerline based on lateral deviation
 Vec2 LaptimeSimulator::computeOffsetPos(size_t idx, double lateral) {
+    size_t N = track_data.size();
     double cx = track_data[idx].x;
     double cy = track_data[idx].y;
 
-    double tx = track_data[idx+1].x - track_data[idx].x;
-    double ty = track_data[idx+1].y - track_data[idx].y;
+    // Wrap around for circular track indexing
+    size_t next_idx = (idx + 1) % N;
+    double tx = track_data[next_idx].x - track_data[idx].x;
+    double ty = track_data[next_idx].y - track_data[idx].y;
 
     double len = std::hypot(tx, ty);
+
+    // If the segment length is too small, return the centerline position to avoid division by zero
+    if (len < 1e-6) {
+        return Vec2{cx, cy};
+    }
+
     tx /= len;
     ty /= len;
 
@@ -248,22 +257,6 @@ double LaptimeSimulator::clampLateral(double lateral, double min_val, double max
     if (lateral < true_min) return true_min;
     if (lateral > true_max) return true_max;
     return lateral;
-}
-
-// Computes the position of the vehicle along the track given an index and lateral offset
-Vec2 LaptimeSimulator::computeLinePos(size_t idx, double lateral) {
-    double cx = track_data[idx].x;
-    double cy = track_data[idx].y;
-    double tx = track_data[idx+1].x - track_data[idx].x;
-    double ty = track_data[idx+1].y - track_data[idx].y;
-    double len = std::hypot(tx, ty);
-    tx /= len; ty /= len;
-    double nx = -ty; double ny =  tx;
-
-    Vec2 pos;
-    pos.x = cx + lateral * nx;
-    pos.y = cy + lateral * ny;
-    return pos;
 }
 
 // Orchestrates pipeline runner execution
