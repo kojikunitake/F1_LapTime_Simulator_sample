@@ -384,18 +384,19 @@ void LaptimeSimulator::computeCornerLimits() {
     size_t N = track_data.size();
     v_max_profile.resize(N, 80.0);
 
-    for (size_t i = 1; i < N - 1; ++i) {
-        Vec2 A = computeOffsetPos(i - 1, lateral_offsets[i - 1]);
-        Vec2 B = computeOffsetPos(i,     lateral_offsets[i]);
-        Vec2 C = computeOffsetPos(i + 1, lateral_offsets[i + 1]);
+    for (size_t i = 0; i < N - 1; ++i) {
+        // Wrap around indices for circular track continuity
+        size_t prev_idx = (i - 1 + N) % N;
+        size_t curr_idx = i;
+        size_t next_idx = (i + 1) % N;
+
+        Vec2 A = computeOffsetPos(prev_idx, lateral_offsets[prev_idx]);
+        Vec2 B = computeOffsetPos(curr_idx,     lateral_offsets[curr_idx]);
+        Vec2 C = computeOffsetPos(next_idx, lateral_offsets[next_idx]);
 
         double kappa = curvatureFromLine(A, B, C);
         double v_grip = std::sqrt(49.0 / std::max(kappa, 1e-5)); // Enforce max 5G lateral limit
         v_max_profile[i] = std::min(v_grip, 80.0);
-    }
-    if (N > 0) {
-        v_max_profile = v_max_profile;
-        v_max_profile[N - 1] = v_max_profile[N - 2];
     }
 }
 
