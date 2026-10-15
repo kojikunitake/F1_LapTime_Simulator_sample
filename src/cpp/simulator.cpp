@@ -165,82 +165,6 @@ void LaptimeSimulator::updateVehicle(VehicleState& state, double throttle, doubl
     state.s += state.v * dt;
 }
 
-// Core forward simulation runner loop WITH CONDITIONED TELEMETRY LOGGING
-// enable_telemetry Output logging flag to control telemetry file writing
-double LaptimeSimulator::computeLapTime(const std::vector<double>& current_lateral, bool enable_telemetry) {
-    VehicleState state;
-    state.v = 0.0;
-    state.s = 0.0;
-    state.lateral = current_lateral[0];
-
-    double lap_time = 0.0;
-    double s_sector1_end = dist_table.back() / 3.0;
-    double s_sector2_end = dist_table.back() * 2.0 / 3.0;
-
-    std::ofstream telemetry_out;
-    
-    // Open telemetry log file if telemetry is enabled (avoid I/O bottleneck when not needed)
-    if (enable_telemetry) {
-        fs::path log_dir = output_dir / "logs";
-        if (!fs::exists(log_dir)) {
-            fs::create_directories(log_dir);
-        }
-        telemetry_out.open(log_dir / "vmax_log.csv");
-        if (telemetry_out.is_open()) {
-            telemetry_out << "idx,s,kappa,vmax,v\n";
-        }
-    }
-
-    // Main simulation loop with a maximum of 20,000 steps to prevent infinite loops
-    for (int step = 0; step < 20000; ++step) {
-        size_t idx = findTrackIndex(state.s);
-        if (idx >= track_data.size() - 2) break;
-
-        double vmax = computeVmaxFromLine(idx, current_lateral);
-
-        if (state.s <= s_sector1_end) {
-            vmax *= 0.95;
-        } else if (state.s <= s_sector2_end) {
-            vmax *= 1.00;
-        } else {
-            vmax *= 1.05;
-        }
-
-        double throttle = 1.0;
-        double brake = 0.0;
-
-        if (state.v > vmax) {
-            throttle = 0.0;
-            brake = 1.0;
-        }
-
-        // Write telemetry data for analysis if enabled and file is open
-        if (enable_telemetry && telemetry_out.is_open()) {
-            Vec2 A = computeOffsetPos(idx - 1, current_lateral[idx - 1]);
-            Vec2 B = computeOffsetPos(idx,     current_lateral[idx]);
-            Vec2 C = computeOffsetPos(idx + 1, current_lateral[idx + 1]);
-            double kappa = curvatureFromLine(A, B, C);
-
-            telemetry_out << idx << "," 
-                          << state.s << "," 
-                          << kappa << "," 
-                          << vmax << "," 
-                          << state.v << "\n";
-        }
-
-        // Update vehicle state based on current throttle and brake inputs
-        updateVehicle(state, throttle, brake);
-        lap_time += dt;
-
-        if (state.s >= dist_table.back()) break;
-    }
-
-    if (enable_telemetry && telemetry_out.is_open()) {
-        telemetry_out.close();
-    }
-    return lap_time;
-}
-
 // Computes the lateral limits (left and right) for a given track point based on its boundaries
 std::pair<double, double> LaptimeSimulator::computeLateralLimit(const TrackPoint& p) {
     double left_dist  = std::hypot(p.left_x  - p.x, p.left_y  - p.y);
@@ -384,14 +308,14 @@ void LaptimeSimulator::computeCornerLimits() {
     size_t N = track_data.size();
     v_max_profile.resize(N, 80.0);
 
-    for (size_t i = 0; i < N - 1; ++i) {
+    for (size_t i = 0; i < N; ++i) {
         // Wrap around indices for circular track continuity
         size_t prev_idx = (i - 1 + N) % N;
         size_t curr_idx = i;
         size_t next_idx = (i + 1) % N;
 
         Vec2 A = computeOffsetPos(prev_idx, lateral_offsets[prev_idx]);
-        Vec2 B = computeOffsetPos(curr_idx,     lateral_offsets[curr_idx]);
+        Vec2 B = computeOffsetPos(curr_idx, lateral_offsets[curr_idx]);
         Vec2 C = computeOffsetPos(next_idx, lateral_offsets[next_idx]);
 
         double kappa = curvatureFromLine(A, B, C);
@@ -592,4 +516,81 @@ void LaptimeSimulator::optimiseLineGradient() {
     }
 
     std::cout << "[Optimiser] Trajectory processing finalised. Optimal line frozen." << std::endl;
+}
+
+// Not in use: This function was intended for a single-pass simulation with telemetry logging, but the current implementation uses the two-pass solver for better accuracy and performance.
+// Core forward simulation runner loop WITH CONDITIONED TELEMETRY LOGGING
+// enable_telemetry Output logging flag to control telemetry file writing
+double LaptimeSimulator::computeLapTime(const std::vector<double>& current_lateral, bool enable_telemetry) {
+    VehicleState state;
+    state.v = 0.0;
+    state.s = 0.0;
+    state.lateral = current_lateral[0];
+
+    double lap_time = 0.0;
+    double s_sector1_end = dist_table.back() / 3.0;
+    double s_sector2_end = dist_table.back() * 2.0 / 3.0;
+
+    std::ofstream telemetry_out;
+    
+    // Open telemetry log file if telemetry is enabled (avoid I/O bottleneck when not needed)
+    if (enable_telemetry) {
+        fs::path log_dir = output_dir / "logs";
+        if (!fs::exists(log_dir)) {
+            fs::create_directories(log_dir);
+        }
+        telemetry_out.open(log_dir / "vmax_log.csv");
+        if (telemetry_out.is_open()) {
+            telemetry_out << "idx,s,kappa,vmax,v\n";
+        }
+    }
+
+    // Main simulation loop with a maximum of 20,000 steps to prevent infinite loops
+    for (int step = 0; step < 20000; ++step) {
+        size_t idx = findTrackIndex(state.s);
+        if (idx >= track_data.size() - 2) break;
+
+        double vmax = computeVmaxFromLine(idx, current_lateral);
+
+        if (state.s <= s_sector1_end) {
+            vmax *= 0.95;
+        } else if (state.s <= s_sector2_end) {
+            vmax *= 1.00;
+        } else {
+            vmax *= 1.05;
+        }
+
+        double throttle = 1.0;
+        double brake = 0.0;
+
+        if (state.v > vmax) {
+            throttle = 0.0;
+            brake = 1.0;
+        }
+
+        // Write telemetry data for analysis if enabled and file is open
+        if (enable_telemetry && telemetry_out.is_open()) {
+            Vec2 A = computeOffsetPos(idx - 1, current_lateral[idx - 1]);
+            Vec2 B = computeOffsetPos(idx,     current_lateral[idx]);
+            Vec2 C = computeOffsetPos(idx + 1, current_lateral[idx + 1]);
+            double kappa = curvatureFromLine(A, B, C);
+
+            telemetry_out << idx << "," 
+                          << state.s << "," 
+                          << kappa << "," 
+                          << vmax << "," 
+                          << state.v << "\n";
+        }
+
+        // Update vehicle state based on current throttle and brake inputs
+        updateVehicle(state, throttle, brake);
+        lap_time += dt;
+
+        if (state.s >= dist_table.back()) break;
+    }
+
+    if (enable_telemetry && telemetry_out.is_open()) {
+        telemetry_out.close();
+    }
+    return lap_time;
 }

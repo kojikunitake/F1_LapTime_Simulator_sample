@@ -76,7 +76,6 @@ private:
     void computeForwardPass();
     void computeBackwardPass();
     void synthesiseVelocityProfile();
-    double runSimulationPass(const std::vector<double>& test_lateral);
 
 public:
     LaptimeSimulator(const std::string& input_path, const std::string& output_path);
@@ -92,12 +91,13 @@ public:
 
     // Saves the calculated optimal trajectory into a CSV
     bool saveResult(const std::string& circuit_name);
-
-    // Overloaded function to compute lap time (Legacy loop compatibility)
-    double computeLapTime(const std::vector<double>& current_lateral, bool enable_telemetry = false);
     
     // Integrates and extracts total lap time from the final profile
     double calculateLapTimeFromProfile();
+
+    // Not in use: This function was intended for a single-pass simulation with telemetry logging, but the current implementation uses the two-pass solver for better accuracy and performance.
+    // Overloaded function to compute lap time (Legacy loop compatibility)
+    double computeLapTime(const std::vector<double>& current_lateral, bool enable_telemetry = false);
 };
 
 #endif // SIMULATOR_HPP
