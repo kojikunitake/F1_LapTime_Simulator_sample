@@ -88,58 +88,24 @@ size_t LaptimeSimulator::findTrackIndex(double s) {
     return idx;
 }
 
-// Computes the position offset from the centerline based on lateral deviation
-Vec2 LaptimeSimulator::computeOffsetPos(size_t idx, double lateral) {
-    size_t N = track_data.size();
-    double cx = track_data[idx].x;
-    double cy = track_data[idx].y;
-
-    // Wrap around for circular track indexing
-    size_t next_idx = (idx + 1) % N;
-    double tx = track_data[next_idx].x - track_data[idx].x;
-    double ty = track_data[next_idx].y - track_data[idx].y;
-
-    double len = std::hypot(tx, ty);
-
-    // If the segment length is too small, return the centerline position to avoid division by zero
-    if (len < 1e-6) {
-        return Vec2{cx, cy};
-    }
-
-    tx /= len;
-    ty /= len;
-
-    double nx = -ty;
-    double ny =  tx;
-
-    Vec2 pos;
-    pos.x = cx + lateral * nx;
-    pos.y = cy + lateral * ny;
-    return pos;
-}
-
-// Computes curvature (kappa) from three consecutive points A, B, C using the circumcircle method
-double LaptimeSimulator::curvatureFromLine(const Vec2& A, const Vec2& B, const Vec2& C) {
-    double a = std::hypot(B.x - A.x, B.y - A.y);
-    double b = std::hypot(C.x - B.x, C.y - B.y);
-    double c = std::hypot(C.x - A.x, C.y - A.y);
-
-    // Using Heron's formula to compute the area of the triangle formed by points A, B, C
-    double s = (a + b + c) / 2.0;
-    double area = std::sqrt(std::max(s*(s-a)*(s-b)*(s-c), 0.0));
-
-    if (area < 1e-6) return 0.0;
-    return (4.0 * area) / (a * b * c);
-}
-
 // Computes the maximum allowable speed at a given track index based on curvature and lateral position
 double LaptimeSimulator::computeVmaxFromLine(size_t idx, const std::vector<double>& current_lateral) {
-    Vec2 A = computeOffsetPos(idx - 1, current_lateral[idx - 1]);
-    Vec2 B = computeOffsetPos(idx,     current_lateral[idx]);
-    Vec2 C = computeOffsetPos(idx + 1, current_lateral[idx + 1]);
+    const size_t n = track_soa.size;
+    
+    // Safe guard against out-of-bounds access for circular track indexing
+    size_t prev_idx = (idx == 0) ? n - 1 : idx - 1;
+    size_t next_idx = (idx == n - 1) ? 0 : idx + 1;
 
-    // Use curvature to determine maximum speed, applying a simple physics model
-    double kappa = curvatureFromLine(A, B, C);
+    double ax = 0.0, ay = 0.0;
+    double bx = 0.0, by = 0.0;
+    double cx = 0.0, cy = 0.0;
+
+    computeOffsetPos(track_soa, prev_idx, current_lateral[prev_idx], ax, ay);
+    computeOffsetPos(track_soa, idx,      current_lateral[idx],      bx, by);
+    computeOffsetPos(track_soa, next_idx, current_lateral[next_idx],  cx, cy);
+
+    double kappa = curvatureFromLine(ax, ay, bx, by, cx, cy);
+
     double v = std::sqrt(49.0 / std::max(kappa, 1e-5));
 
     return std::min(v, 80.0);
@@ -172,22 +138,23 @@ std::pair<double, double> LaptimeSimulator::computeLateralLimit(const TrackPoint
     return std::make_pair(left_dist, right_dist);
 }
 
-// Clamps the lateral position to ensure it stays within the track boundaries
-double LaptimeSimulator::clampLateral(double lateral, double min_val, double max_val) {
-    // Ensure min_val is truly the smaller bound mathematically
-    double true_min = std::min(min_val, max_val);
-    double true_max = std::max(min_val, max_val);
-
-    if (lateral < true_min) return true_min;
-    if (lateral > true_max) return true_max;
-    return lateral;
-}
-
 // Orchestrates pipeline runner execution
 // Application entry point to run the simulation and optimisation sequence
-void LaptimeSimulator::runSimulation(bool enable_telemetry) {
+void LaptimeSimulator::runSimulation(bool initialisation, bool enable_telemetry) {
+    // Cache the SoA representation for efficient access during the simulation
+    if( initialisation ) {
+        convertToSoA();
+    }
+
+    const size_t N = track_soa.size;
+
+    v_max_profile.resize(N, 0.0);
+    v_fwd_profile.resize(N, 0.0);
+    v_bwd_profile.resize(N, 0.0);
+
     // Execute the clean 2-pass solver pipeline once
-    computeCornerLimits();
+    computeCornerLimits(track_soa, 0, N, v_max_profile.data());
+
     computeForwardPass();
     computeBackwardPass();
     synthesiseVelocityProfile();
@@ -257,14 +224,15 @@ bool LaptimeSimulator::saveResult(const std::string& circuit_name) {
         double raw_long_g = accel_long / g_accel;
 
         // Trajectory curvature-based lateral acceleration
-        Vec2 p_prev = { opt_x[prev_idx], opt_y[prev_idx] };
-        Vec2 p_curr = { opt_x[i],        opt_y[i] };
-        Vec2 p_next = { opt_x[next_idx], opt_y[next_idx] };
-
-        double actual_curvature = curvatureFromLine(p_prev, p_curr, p_next);
+        double actual_curvature = curvatureFromLine(
+            opt_x[prev_idx], opt_y[prev_idx],  // A
+            opt_x[i],        opt_y[i],         // B
+            opt_x[next_idx], opt_y[next_idx]   // C
+        );
         double raw_lat_g = (v_curr * v_curr * actual_curvature) / g_accel;
 
-        double cross_product = (p_curr.x - p_prev.x) * (p_next.y - p_curr.y) - (p_curr.y - p_prev.y) * (p_next.x - p_curr.x);
+        double cross_product = (opt_x[i] - opt_x[prev_idx]) * (opt_y[next_idx] - opt_y[i]) 
+                             - (opt_y[i] - opt_y[prev_idx]) * (opt_x[next_idx] - opt_x[i]);
         double turn_sign = (cross_product >= 0.0) ? 1.0 : -1.0;
         double signed_lat_g = raw_lat_g * turn_sign;
 
@@ -304,23 +272,42 @@ bool LaptimeSimulator::saveResult(const std::string& circuit_name) {
 // ============================================================================
 
 // 1. Compute geometry and friction-limited maximum velocity (v_max) for each node
-void LaptimeSimulator::computeCornerLimits() {
-    size_t N = track_data.size();
-    v_max_profile.resize(N, 80.0);
+void LaptimeSimulator::computeCornerLimits(
+    const TrackSoA& soa,
+    size_t start_idx,
+    size_t end_idx,
+    double* __restrict out_v_max_profile
+) {
+    // Extract raw pointers to the SoA arrays for SIMD-friendly access
+    const double* __restrict cx = soa.center_x.data();
+    const double* __restrict cy = soa.center_y.data();
+    const size_t n = soa.size;
 
-    for (size_t i = 0; i < N; ++i) {
-        // Wrap around indices for circular track continuity
-        size_t prev_idx = (i - 1 + N) % N;
-        size_t curr_idx = i;
-        size_t next_idx = (i + 1) % N;
+    // SIMD-friendly loop: Compute curvature and lateral G limits for each track segment
+    #pragma omp simd
+    for (size_t i = start_idx; i < end_idx; ++i) {
+        // Index wrapping for circular track continuity
+        size_t prev_idx = (i == 0) ? n - 1 : i - 1;
+        size_t next_idx = (i == n - 1) ? 0 : i + 1;
 
-        Vec2 A = computeOffsetPos(prev_idx, lateral_offsets[prev_idx]);
-        Vec2 B = computeOffsetPos(curr_idx, lateral_offsets[curr_idx]);
-        Vec2 C = computeOffsetPos(next_idx, lateral_offsets[next_idx]);
+        // Loading centerline coordinates for the three points A, B, C
+        double x_prev = cx[prev_idx], y_prev = cy[prev_idx];
+        double x_curr = cx[i],        y_curr = cy[i];
+        double x_next = cx[next_idx], y_next = cy[next_idx];
 
-        double kappa = curvatureFromLine(A, B, C);
-        double v_grip = std::sqrt(49.0 / std::max(kappa, 1e-5)); // Enforce max 5G lateral limit
-        v_max_profile[i] = std::min(v_grip, 80.0);
+        // Cacluate kappa using the circumcircle method (complete in-register)
+        double area = (x_curr - x_prev) * (y_next - y_prev) - (y_curr - y_prev) * (x_next - x_prev);
+        double d1_sq = (x_curr - x_prev) * (x_curr - x_prev) + (y_curr - y_prev) * (y_curr - y_prev);
+        double d2_sq = (x_next - x_curr) * (x_next - x_curr) + (y_next - y_curr) * (y_next - y_curr);
+        double d3_sq = (x_next - x_prev) * (x_next - x_prev) + (y_next - y_prev) * (y_next - y_prev);
+        
+        double den = std::sqrt(d1_sq * d2_sq * d3_sq);
+        double kappa = (den < 1e-6) ? 0.0 : std::abs(2.0 * area / den);
+
+        double safe_kappa = (kappa > 1e-5) ? kappa : 1e-5;
+        double v = std::sqrt(49.0 / safe_kappa);
+
+        out_v_max_profile[i] = (v < 80.0) ? v : 80.0;
     }
 }
 
@@ -425,7 +412,10 @@ void LaptimeSimulator::optimiseLineGradient() {
     const double h = 1.0;              // 1.0m perturbation to overcome coarse grid grid resolution
 
     // 1. Establish the authentic global baseline performance
-    computeCornerLimits();
+
+    // Pre-compute geometric limits for all nodes to avoid repeated expensive calculations
+    computeCornerLimits(track_soa, 1, N - 1, v_max_profile.data());
+
     computeForwardPass();
     computeBackwardPass();
     synthesiseVelocityProfile();
@@ -439,20 +429,36 @@ void LaptimeSimulator::optimiseLineGradient() {
         // STEP 1: Compute High-Fidelity Central Differences Across ALL Nodes (Cyclic Loop)
         for (size_t i = 0; i < N; ++i) {
             double original_lateral = lateral_offsets[i];
-            auto [max_left, max_right] = computeLateralLimit(track_data[i]);
-            double actual_right_bound = (max_right > 0) ? -max_right : max_right;
-            double actual_left_bound = max_left;
+
+            // Use cached SoA limits for performance, avoiding repeated geometric calculations
+            double actual_right_bound = track_soa.max_right_limit[i];
+            double actual_left_bound = track_soa.max_left_limit[i];
 
             double t_plus = current_best_laptime;
             double t_minus = current_best_laptime;
+
+            // Temporary variables to hold the computed offset positions for the perturbed lateral positions
+            double test_x = 0.0;
+            double test_y = 0.0;
 
             // Test Upper Bound Shift (Left: +h)
             double lat_plus = original_lateral + h;
             if (lat_plus <= actual_left_bound) {
                 lateral_offsets[i] = lat_plus;
+
+                // Compute the new offset position based on the perturbed lateral value
+                computeOffsetPos(track_soa, i, lat_plus, test_x, test_y);
+
+                // Backup original centerline coordinates before perturbation
+                double backup_cx = track_soa.center_x[i];
+                double backup_cy = track_soa.center_y[i];
+                track_soa.center_x[i] = test_x;
+                track_soa.center_y[i] = test_y;
+
                 // Run localised 2-pass update (In a full scalable architecture, compute local window. 
                 // For N=172, central evaluation secures perfect physical interaction across long straights)
-                computeCornerLimits();
+                computeCornerLimits(track_soa, 0, N, v_max_profile.data());
+
                 computeForwardPass();
                 computeBackwardPass();
                 synthesiseVelocityProfile();
@@ -463,7 +469,18 @@ void LaptimeSimulator::optimiseLineGradient() {
             double lat_minus = original_lateral - h;
             if (lat_minus >= actual_right_bound) {
                 lateral_offsets[i] = lat_minus;
-                computeCornerLimits();
+
+                // Compute the new offset position based on the perturbed lateral value
+                computeOffsetPos(track_soa, i, lat_minus, test_x, test_y);
+
+                // Backup original centerline coordinates before perturbation
+                double backup_cx = track_soa.center_x[i];
+                double backup_cy = track_soa.center_y[i];
+                track_soa.center_x[i] = test_x;
+                track_soa.center_y[i] = test_y;
+
+                computeCornerLimits(track_soa, 0, N, v_max_profile.data());
+
                 computeForwardPass();
                 computeBackwardPass();
                 synthesiseVelocityProfile();
@@ -478,12 +495,14 @@ void LaptimeSimulator::optimiseLineGradient() {
 
         // STEP 2: Simultaneous Gradient Descent Update with Clamp Enforcement
         for (size_t i = 0; i < N; ++i) {
-            auto [max_left, max_right] = computeLateralLimit(track_data[i]);
-            double actual_right_bound = (max_right > 0) ? -max_right : max_right;
-            double actual_left_bound = max_left;
+            // Use cached SoA limits for performance, avoiding repeated geometric calculations
+            double actual_right_bound = track_soa.max_right_limit[i];
+            double actual_left_bound = track_soa.max_left_limit[i];
 
             double updated_lateral = lateral_offsets[i] - learning_rate * gradients[i];
-            lateral_offsets[i] = clampLateral(updated_lateral, actual_right_bound, actual_left_bound);
+            
+            // SIMD-friendly clamping to ensure lateral positions remain within track boundaries
+            lateral_offsets[i] = std::max(actual_right_bound, std::min(updated_lateral, actual_left_bound));
         }
 
         // STEP 3: Continuous Cyclical 3-Point Moving Average (Eradicates Boundary Discontinuity)
@@ -492,18 +511,21 @@ void LaptimeSimulator::optimiseLineGradient() {
             size_t prev_idx = (i - 1 + N) % N; // Cyclical wrap-around for node 0
             size_t next_idx = (i + 1) % N;     // Cyclical wrap-around for node N-1
 
-            auto [max_left, max_right] = computeLateralLimit(track_data[i]);
-            double actual_right_bound = (max_right > 0) ? -max_right : max_right;
-            double actual_left_bound = max_left;
+            // Use cached SoA limits for performance, avoiding repeated geometric calculations
+            double actual_right_bound = track_soa.max_right_limit[i];
+            double actual_left_bound = track_soa.max_left_limit[i];
 
             // Laplacian kernel [0.25, 0.50, 0.25]
             double smooth_val = 0.25 * lateral_offsets[prev_idx] + 0.5 * lateral_offsets[i] + 0.25 * lateral_offsets[next_idx];
-            smoothed_offsets[i] = clampLateral(smooth_val, actual_right_bound, actual_left_bound);
+
+            // SIMD-friendly clamping to ensure lateral positions remain within track boundaries
+            smoothed_offsets[i] = std::max(actual_right_bound, std::min(smooth_val, actual_left_bound));
         }
         lateral_offsets = smoothed_offsets;
 
         // STEP 4: Synchronise Absolute Core Physics Profiles and Update Master Lap Time
-        computeCornerLimits();
+        computeCornerLimits(track_soa, 0, N, v_max_profile.data());
+
         computeForwardPass();
         computeBackwardPass();
         synthesiseVelocityProfile();
@@ -518,79 +540,36 @@ void LaptimeSimulator::optimiseLineGradient() {
     std::cout << "[Optimiser] Trajectory processing finalised. Optimal line frozen." << std::endl;
 }
 
-// Not in use: This function was intended for a single-pass simulation with telemetry logging, but the current implementation uses the two-pass solver for better accuracy and performance.
-// Core forward simulation runner loop WITH CONDITIONED TELEMETRY LOGGING
-// enable_telemetry Output logging flag to control telemetry file writing
-double LaptimeSimulator::computeLapTime(const std::vector<double>& current_lateral, bool enable_telemetry) {
-    VehicleState state;
-    state.v = 0.0;
-    state.s = 0.0;
-    state.lateral = current_lateral[0];
-
-    double lap_time = 0.0;
-    double s_sector1_end = dist_table.back() / 3.0;
-    double s_sector2_end = dist_table.back() * 2.0 / 3.0;
-
-    std::ofstream telemetry_out;
+// Converts the AoS track representation into a SoA format for SIMD-friendly access
+void LaptimeSimulator::convertToSoA() {
+    size_t N = track_data.size();
+    track_soa.size = N;
     
-    // Open telemetry log file if telemetry is enabled (avoid I/O bottleneck when not needed)
-    if (enable_telemetry) {
-        fs::path log_dir = output_dir / "logs";
-        if (!fs::exists(log_dir)) {
-            fs::create_directories(log_dir);
-        }
-        telemetry_out.open(log_dir / "vmax_log.csv");
-        if (telemetry_out.is_open()) {
-            telemetry_out << "idx,s,kappa,vmax,v\n";
-        }
+    // Preallocate SoA vectors to avoid repeated memory allocations during the loop
+    track_soa.center_x.resize(N);
+    track_soa.center_y.resize(N);
+    track_soa.left_x.resize(N);
+    track_soa.left_y.resize(N);
+    track_soa.right_x.resize(N);
+    track_soa.right_y.resize(N);
+    track_soa.max_left_limit.resize(N);
+    track_soa.max_right_limit.resize(N);
+
+    // #pragma omp parallel - Uncomment this line to enable OpenMP parallelisation for large track datasets
+    for (size_t i = 0; i < N; ++i) {
+        const auto& p = track_data[i];
+        track_soa.center_x[i] = p.x;
+        track_soa.center_y[i] = p.y;
+        track_soa.left_x[i]   = p.left_x;
+        track_soa.left_y[i]   = p.left_y;
+        track_soa.right_x[i]  = p.right_x;
+        track_soa.right_y[i]  = p.right_y;
+
+        // Executing this in a single pass avoids repeated calculations during the simulation loop,
+        // improving performance.
+        track_soa.max_left_limit[i]  = std::hypot(p.left_x - p.x, p.left_y - p.y);
+        double r_dist = std::hypot(p.right_x - p.x, p.right_y - p.y);
+        track_soa.max_right_limit[i] = (r_dist > 0) ? -r_dist : r_dist;
     }
-
-    // Main simulation loop with a maximum of 20,000 steps to prevent infinite loops
-    for (int step = 0; step < 20000; ++step) {
-        size_t idx = findTrackIndex(state.s);
-        if (idx >= track_data.size() - 2) break;
-
-        double vmax = computeVmaxFromLine(idx, current_lateral);
-
-        if (state.s <= s_sector1_end) {
-            vmax *= 0.95;
-        } else if (state.s <= s_sector2_end) {
-            vmax *= 1.00;
-        } else {
-            vmax *= 1.05;
-        }
-
-        double throttle = 1.0;
-        double brake = 0.0;
-
-        if (state.v > vmax) {
-            throttle = 0.0;
-            brake = 1.0;
-        }
-
-        // Write telemetry data for analysis if enabled and file is open
-        if (enable_telemetry && telemetry_out.is_open()) {
-            Vec2 A = computeOffsetPos(idx - 1, current_lateral[idx - 1]);
-            Vec2 B = computeOffsetPos(idx,     current_lateral[idx]);
-            Vec2 C = computeOffsetPos(idx + 1, current_lateral[idx + 1]);
-            double kappa = curvatureFromLine(A, B, C);
-
-            telemetry_out << idx << "," 
-                          << state.s << "," 
-                          << kappa << "," 
-                          << vmax << "," 
-                          << state.v << "\n";
-        }
-
-        // Update vehicle state based on current throttle and brake inputs
-        updateVehicle(state, throttle, brake);
-        lap_time += dt;
-
-        if (state.s >= dist_table.back()) break;
-    }
-
-    if (enable_telemetry && telemetry_out.is_open()) {
-        telemetry_out.close();
-    }
-    return lap_time;
+    std::cout << "[HPC] Track AoS successfully transformed to SoA. Geometric limits cached." << std::endl;
 }
