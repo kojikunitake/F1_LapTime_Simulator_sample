@@ -41,6 +41,10 @@ struct TrackSoA {
     std::vector<double> right_y;
     std::vector<double> max_left_limit;
     std::vector<double> max_right_limit;
+    std::vector<double> dist_table;
+    std::vector<double> v_final_profile;    // Systhesised velocity profile
+    std::vector<double> g_long_profile;     // Lingitudinal G
+    std::vector<double> g_lat_profile;      // Lateral G
 };
 
 class LaptimeSimulator {
@@ -49,7 +53,6 @@ private:
     std::filesystem::path output_dir;
     
     std::vector<TrackPoint> track_data;
-    std::vector<double> dist_table;
     std::vector<double> lateral_offsets;
     VehicleParams vehicle_params;
     double dt; // Simulation time step
@@ -61,14 +64,9 @@ private:
     std::vector<double> v_max_profile;   // Geometry/G-grip limits
     std::vector<double> v_fwd_profile;   // Forward acceleration profile
     std::vector<double> v_bwd_profile;   // Backward deceleration profile
-    std::vector<double> v_final_profile; // Synthesised target velocity profile
-
-    // ADDED FOR G-G TELEMETRY EXTENSION
-    std::vector<double> g_long_profile; // Longitudinal G profile
-    std::vector<double> g_lat_profile;  // Lateral G profile
 
     // Internal helper methods for track math and coordinate transforms
-    std::vector<double> buildDistanceTable(const std::vector<TrackPoint>& track);
+    void buildDistanceTable(const std::vector<TrackPoint>& track);
     size_t findTrackIndex(double s);
 
     // Computes curvature (kappa) from three consecutive points A, B, C using the circumcircle method

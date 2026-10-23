@@ -56,7 +56,7 @@ bool LaptimeSimulator::loadCircuit(const std::string& circuit_name) {
         track_data.push_back(tp);
     }
 
-    dist_table = buildDistanceTable(track_data);
+    buildDistanceTable(track_data);
     lateral_offsets.assign(track_data.size(), 0.0);
 
     std::cout << "[Simulator] Dataset loaded successfully: " << circuit_name 
@@ -65,26 +65,28 @@ bool LaptimeSimulator::loadCircuit(const std::string& circuit_name) {
 }
 
 // Builds a cumulative distance table from the track points for quick lookup during simulation
-std::vector<double> LaptimeSimulator::buildDistanceTable(const std::vector<TrackPoint>& track) {
-    std::vector<double> dist;
-    dist.reserve(track.size());
-    dist.push_back(0.0);
+void LaptimeSimulator::buildDistanceTable(const std::vector<TrackPoint>& track) {
+    const size_t N = track.size();
+    
+    this->track_soa.dist_table.clear();
+    this->track_soa.dist_table.reserve(N);
+    this->track_soa.dist_table.push_back(0.0);
 
-    for (size_t i = 1; i < track.size(); ++i) {
+    for (size_t i = 1; i < N; ++i) {
         double dx = track[i].x - track[i-1].x;
         double dy = track[i].y - track[i-1].y;
         double dz = track[i].z - track[i-1].z;
         double d = std::sqrt(dx*dx + dy*dy + dz*dz);
-        dist.push_back(dist.back() + d);
+        
+        this->track_soa.dist_table.push_back(this->track_soa.dist_table.back() + d);
     }
-    return dist;
 }
 
 // Finds the index of the track point corresponding to a given cumulative distance 's'
 size_t LaptimeSimulator::findTrackIndex(double s) {
-    auto it = std::lower_bound(dist_table.begin(), dist_table.end(), s);
-    size_t idx = std::distance(dist_table.begin(), it);
-    if (idx >= dist_table.size()) idx = dist_table.size() - 1;
+    auto it = std::lower_bound(track_soa.dist_table.begin(), track_soa.dist_table.end(), s);
+    size_t idx = std::distance(track_soa.dist_table.begin(), it);
+    if (idx >= track_soa.dist_table.size()) idx = track_soa.dist_table.size() - 1;
     return idx;
 }
 
@@ -180,8 +182,8 @@ bool LaptimeSimulator::saveResult(const std::string& circuit_name) {
     }
 
     size_t N = track_data.size();
-    g_long_profile.resize(N, 0.0);
-    g_lat_profile.resize(N, 0.0);
+    track_soa.g_long_profile.resize(N, 0.0);
+    track_soa.g_lat_profile.resize(N, 0.0);
 
     const double g_accel = 9.81; // Gravity constant
     const double max_friction_g = 5.0; // Explicit F1 Tire Grip Limit (5.0G)
@@ -216,8 +218,8 @@ bool LaptimeSimulator::saveResult(const std::string& circuit_name) {
         double ds = std::sqrt(dx_seg*dx_seg + dy_seg*dy_seg);
         if (ds < 1e-3) ds = 1.0;
 
-        double v_curr = v_final_profile[i];
-        double v_next = v_final_profile[next_idx];
+        double v_curr = track_soa.v_final_profile[i];
+        double v_next = track_soa.v_final_profile[next_idx];
 
         // Energy-based longitudinal acceleration
         double accel_long = (v_next * v_next - v_curr * v_curr) / (2.0 * ds);
@@ -244,8 +246,8 @@ bool LaptimeSimulator::saveResult(const std::string& circuit_name) {
             signed_lat_g *= scale;
         }
 
-        g_long_profile[i] = raw_long_g;
-        g_lat_profile[i] = signed_lat_g;
+        track_soa.g_long_profile[i] = raw_long_g;
+        track_soa.g_lat_profile[i] = signed_lat_g;
     }
 
     // Write to CSV
@@ -258,9 +260,9 @@ bool LaptimeSimulator::saveResult(const std::string& circuit_name) {
              << v_max_profile[i] << ","
              << v_fwd_profile[i] << ","
              << v_bwd_profile[i] << ","
-             << v_final_profile[i] << ","
-             << g_long_profile[i] << ","  
-             << g_lat_profile[i] << "\n"; 
+             << track_soa.v_final_profile[i] << ","
+             << track_soa.g_long_profile[i] << ","  
+             << track_soa.g_lat_profile[i] << "\n"; 
     }
     file.close();
     std::cout << "[Simulator] Spatial racing profile with Aligned & Guarded G-Forces logged successfully." << std::endl;
@@ -313,70 +315,89 @@ void LaptimeSimulator::computeCornerLimits(
 
 // 2. Forward Pass: Compute acceleration-limited velocity profile
 void LaptimeSimulator::computeForwardPass() {
-    size_t N = track_data.size();
-    v_fwd_profile.resize(N);
-    
+    const size_t N = track_soa.size;
     if (N == 0) return;
 
-    if (!v_max_profile.empty()) {
-        v_fwd_profile[0] = std::min(30.0, v_max_profile[0]); // Set logical initial pit-exit velocity at the first node
-    }
+    // Extract raw pointers to the SoA arrays for SIMD-friendly access
+    const double* __restrict v_max = this->v_max_profile.data();
+    const double* __restrict dist  = track_soa.dist_table.data();
+    double*       __restrict v_fwd = this->v_fwd_profile.data();
+
+    // Improves cache locality and reduces pointer dereferencing overhead
+    const double F_drive = vehicle_params.max_drive_force;
+    const double mass = vehicle_params.mass;
+    const double aero_coeff = 0.5 * vehicle_params.air_density * vehicle_params.frontal_area * vehicle_params.drag_coefficient;
+
+    // Set the pit-exit velocity at the first node, clamped to the maximum allowed by geometry
+    double initial_v_max = (v_max_profile.empty()) ? 30.0 : v_max[0];
+    v_fwd[0] = (30.0 < initial_v_max) ? 30.0 : initial_v_max;
 
     for (size_t i = 0; i < N - 1; ++i) {
-        double v_curr = v_fwd_profile[i];
-        double ds = dist_table[i + 1] - dist_table[i];
+        double v_curr = v_fwd[i];
+        
+        double ds = dist[i + 1] - dist[i];
 
         // Evaluate powertrain capabilities vs aerodynamic drag forces
-        double F_drive = vehicle_params.max_drive_force;
-        double F_drag = 0.5 * vehicle_params.air_density * vehicle_params.frontal_area * 
-                        vehicle_params.drag_coefficient * v_curr * v_curr;
-        
-        double a_fwd = (F_drive - F_drag) / vehicle_params.mass;
+        double F_drag = aero_coeff * v_curr * v_curr;
+        double a_fwd = (F_drive - F_drag) / mass;
         
         // Integrate state across spatial delta
         double v_next_sq = v_curr * v_curr + 2.0 * a_fwd * ds;
         double v_next = (v_next_sq > 0.0) ? std::sqrt(v_next_sq) : 0.0;
 
-        // Clip velocity inside safe geometric boundaries
-        v_fwd_profile[i + 1] = std::min(v_next, v_max_profile[i + 1]);
+        // Avoiding branch misprediction penalties by using a ternary operator for clamping
+        double limit_next = v_max[i + 1];
+        v_fwd[i + 1] = (v_next < limit_next) ? v_next : limit_next;
     }
 }
 
 // 3. Backward Pass: Compute deceleration-limited (braking point) velocity profile
 void LaptimeSimulator::computeBackwardPass() {
-    size_t N = track_data.size();
-    v_bwd_profile.resize(N);
-
+    const size_t N = track_soa.size;
     if (N == 0) return;
-    v_bwd_profile[N - 1] = v_max_profile[N - 1];
+
+    // Improves cache locality and reduces pointer dereferencing overhead
+    const double* __restrict v_max = this->v_max_profile.data();
+    const double* __restrict dist  = track_soa.dist_table.data();
+    double*       __restrict v_bwd = this->v_bwd_profile.data();
+
+    const double F_brake = vehicle_params.max_brake_force;
+    const double mass = vehicle_params.mass;
+    const double aero_coeff = 0.5 * vehicle_params.air_density * vehicle_params.frontal_area * vehicle_params.drag_coefficient;
+
+    // Synchronise the final node's velocity with the maximum allowed by geometry to ensure continuity
+    v_bwd[N - 1] = v_max[N - 1];
 
     for (size_t i = N - 1; i > 0; --i) {
-        double v_curr = v_bwd_profile[i];
-        double ds = dist_table[i] - dist_table[i - 1];
+        size_t curr_idx = i;
+        size_t prev_idx = i - 1;
+
+        double v_curr = v_bwd[curr_idx];
+        
+        double ds = dist[curr_idx] - dist[prev_idx];
 
         // Combine mechanical braking performance with aero drag assistance
-        double F_brake = vehicle_params.max_brake_force;
-        double F_drag = 0.5 * vehicle_params.air_density * vehicle_params.frontal_area * 
-                        vehicle_params.drag_coefficient * v_curr * v_curr;
-        
-        double a_bwd = (F_brake + F_drag) / vehicle_params.mass;
+        double F_drag = aero_coeff * v_curr * v_curr;
+        double a_bwd = (F_brake + F_drag) / mass;
 
         // Retroactively integrate velocity backwards into the entry zone
         double v_prev_sq = v_curr * v_curr + 2.0 * a_bwd * ds;
         double v_prev = (v_prev_sq > 0.0) ? std::sqrt(v_prev_sq) : 0.0;
 
-        v_bwd_profile[i - 1] = std::min(v_prev, v_max_profile[i - 1]);
+        // This avoids branch misprediction penalties and keeps the loop tight for SIMD-friendly execution
+        double limit_prev = v_max[prev_idx];
+        v_bwd[prev_idx] = (v_prev < limit_prev) ? v_prev : limit_prev;
     }
 }
 
 // 4. Synthesise profiles to extract the optimal performance boundary
 void LaptimeSimulator::synthesiseVelocityProfile() {
     size_t N = track_data.size();
-    v_final_profile.resize(N);
+    track_soa.v_final_profile.resize(N);
 
     for (size_t i = 0; i < N; ++i) {
         // Evaluate the intersection of traction circle bounds, grip limits, and power limits
-        v_final_profile[i] = std::min({v_max_profile[i], v_fwd_profile[i], v_bwd_profile[i]});
+        track_soa.v_final_profile[i] = std::min({v_max_profile[i], v_fwd_profile[i], v_bwd_profile[i]});
     }
 }
 
@@ -386,8 +407,8 @@ double LaptimeSimulator::calculateLapTimeFromProfile() {
     if (track_data.empty()) return total_time;
 
     for (size_t i = 0; i < track_data.size() - 1; ++i) {
-        double ds = dist_table[i + 1] - dist_table[i];
-        double v_avg = (v_final_profile[i] + v_final_profile[i + 1]) / 2.0;
+        double ds = track_soa.dist_table[i + 1] - track_soa.dist_table[i];
+        double v_avg = (track_soa.v_final_profile[i] + track_soa.v_final_profile[i + 1]) / 2.0;
         
         // Prevent division-by-zero on edge-case static lockups
         if (v_avg > 0.1) {
@@ -554,6 +575,9 @@ void LaptimeSimulator::convertToSoA() {
     track_soa.right_y.resize(N);
     track_soa.max_left_limit.resize(N);
     track_soa.max_right_limit.resize(N);
+    track_soa.v_final_profile.resize(N, 0.0);
+    track_soa.g_long_profile.resize(N, 0.0);
+    track_soa.g_lat_profile.resize(N, 0.0);
 
     // #pragma omp parallel - Uncomment this line to enable OpenMP parallelisation for large track datasets
     for (size_t i = 0; i < N; ++i) {
